@@ -10,23 +10,49 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
+from datetime import timedelta
+import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+FRONTEND_URL = os.environ.get("FRONTEND_URL")
+
+# LOGGING
+LOG_DIR = os.path.join(BASE_DIR, "log")
+LOG_FILE = "/app.log"
+LOG_PATH = LOG_DIR + LOG_FILE
+if not os.path.exists(LOG_DIR):
+    os.mkdir(LOG_DIR)
+
+if not os.path.exists(LOG_PATH):
+    f = open(LOG_PATH, "a").close()  # create empty log file
+else:
+    f = open(LOG_PATH, "w").close()  # clear log file
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-+qdqlfo^4-#3_@%xw$bosm5nayc0ahry-v504$d+$^6ro(n1k1'
+SECRET_KEY = os.environ.get("API_SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get("APP_ENV") == "DEVELOPMENT"
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = (
+    os.environ.get("API_ALLOWED_HOSTS").split()
+    if os.environ.get("API_ALLOWED_HOSTS")
+    else []
+)
 
+AUTH_USER_MODEL = "app.Users"
+
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_ALL_ORIGINS = True
 
 # Application definition
 
@@ -37,7 +63,35 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    "api.healthcheck",
+    "corsheaders",
+    "rest_framework",
+    "rest_framework_simplejwt",
+    "drf_yasg",
 ]
+
+SIMPLE_JWT = {
+    # Short-term access token lifetime
+    "ACCESS_TOKEN_LIFETIME": timedelta(hours=10),
+    # Long-term refresh token lifetime
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    # Rotate refresh tokens
+    "ROTATE_REFRESH_TOKENS": True,
+    # Blacklist old tokens after rotation
+    "BLACKLIST_AFTER_ROTATION": True,
+    # Signing algorithm
+    "ALGORITHM": "HS256",
+    # Secret key for signing tokens
+    "SIGNING_KEY": SECRET_KEY,
+    # Authentication header type
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    # Authentication header name
+    "AUTH_HEADER_NAME": "HTTP_AUTHORIZATION",
+    # User ID field
+    "USER_ID_FIELD": "user_id",
+    # User ID claim in the token
+    "USER_ID_CLAIM": "user_id",
+}
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -47,6 +101,14 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
+    'app.middleware.request_log.RequestLogMiddleware',
+]
+
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
 ]
 
 ROOT_URLCONF = 'app.urls'
@@ -74,11 +136,16 @@ WSGI_APPLICATION = 'app.wsgi.application'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("POSTGRES_NAME") or "postgres",
+        "USER": os.environ.get("POSTGRES_USER") or "postgres",
+        "PASSWORD": os.environ.get("POSTGRES_PASSWORD") or "password",
+        "HOST": os.environ.get("POSTGRES_HOST") or "host.docker.internal",
+        "PORT": os.environ.get("POSTGRES_PORT") or 5432,
     }
 }
+
 
 
 # Password validation
@@ -99,6 +166,50 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{levelname} {asctime:s} {threadName} {thread:d} {module} {filename} {lineno:d} {name} {funcName} {process:d} {message}",
+            "style": "{",
+        },
+        "simple": {
+            "format": "{levelname} {asctime:s} {module} {filename} {lineno:d} {funcName} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console_handler": {
+            "class": "logging.StreamHandler",
+            "formatter": "simple",
+        },
+        "my_handler": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": LOG_PATH,
+            "mode": "a",
+            "encoding": "utf-8",
+            "formatter": "simple",
+            "backupCount": 5,
+            "maxBytes": 1024 * 1024 * 5,  # 5 MB
+        },
+        "my_handler_detailed": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": LOG_PATH,
+            "mode": "a",
+            "formatter": "verbose",
+            "backupCount": 5,
+            "maxBytes": 1024 * 1024 * 5,  # 5 MB
+        },
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console_handler", "my_handler_detailed"],
+            "level": "INFO",
+            "propagate": True,
+        },
+    },
+}
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.1/topics/i18n/
@@ -115,9 +226,21 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)  # <- '/' directory
+
 STATIC_URL = 'static/'
+
+STATIC_ROOT = os.path.join(PROJECT_ROOT, "static_files")
+
+STATICFILES_DIRS = (os.path.join(PROJECT_ROOT, "static"),)
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# This is where user uploaded file saved to
+MEDIA_URL = "/media/"
+MEDIA_ROOT = os.path.join(BASE_DIR, "media")
